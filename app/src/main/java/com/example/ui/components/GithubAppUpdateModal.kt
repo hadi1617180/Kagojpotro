@@ -168,37 +168,30 @@ fun GithubAppUpdateDialog(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Release Title & Notes Box
+                    // Friendly Update Summary Box (no raw technical markdown or changelogs)
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = glass.inactiveButtonFill,
                         border = BorderStroke(1.dp, glass.inactiveButtonBorder),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 72.dp, max = 210.dp)
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .verticalScroll(rememberScrollState())
                                 .padding(14.dp)
                         ) {
-                            if (updateInfo.releaseTitle.isNotBlank()) {
-                                Text(
-                                    text = updateInfo.releaseTitle,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = glass.textPrimary
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                            }
                             Text(
-                                text = updateInfo.releaseNotes.ifBlank {
-                                    if (isBn) {
-                                        "বাগ ফিক্স এবং পারফরম্যান্স উন্নয়ন করা হয়েছে। আপনার সব ফোল্ডার ও স্ক্যান অক্ষত থাকবে।"
-                                    } else {
-                                        "Bug fixes and performance improvements. All your folders, scans, and settings will remain intact."
-                                    }
+                                text = "Kagojpotro v${updateInfo.remoteVersionName}",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = glass.textPrimary
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = if (isBn) {
+                                    "নতুন ফিচার, আরও দ্রুত পারফরম্যান্স এবং বাগ ফিক্স যুক্ত করা হয়েছে। আপনার সব ফোল্ডার, স্ক্যান ও সেটিংস সম্পূর্ণ অক্ষত থাকবে।"
+                                } else {
+                                    "New features, smoother performance, and bug fixes. All your folders, scans, and settings will remain completely safe."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = glass.textSecondary
@@ -206,23 +199,7 @@ fun GithubAppUpdateDialog(
                         }
                     }
 
-                    // APK Size & Progress
                     val apkAsset = updateInfo.apkAsset
-                    if (apkAsset != null && apkAsset.sizeBytes > 0L) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        val sizeMb = String.format(Locale.US, "%.1f MB", apkAsset.sizeBytes / (1024f * 1024f))
-                        Text(
-                            text = if (isBn) {
-                                "ফাইল: ${apkAsset.name} ($sizeMb)"
-                            } else {
-                                "Package: ${apkAsset.name} ($sizeMb)"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = glass.textSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
 
                     if (updateState.isDownloadingApk) {
                         Spacer(modifier = Modifier.height(12.dp))
