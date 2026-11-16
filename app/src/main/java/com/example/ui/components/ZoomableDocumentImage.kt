@@ -37,6 +37,8 @@ import androidx.compose.material.icons.filled.FilterBAndW
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -66,9 +68,11 @@ import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.data.ScanFilter
+import com.example.ui.theme.LocalGlassPalette
 import kotlin.math.min
 import kotlinx.coroutines.launch
 
@@ -862,3 +866,47 @@ fun compactFilterLabel(filter: ScanFilter, isBn: Boolean): String {
         ScanFilter.GRAYSCALE -> if (isBn) "গ্রেস্কেল" else "Grayscale"
     }
 }
+
+/**
+ * Shared bottom-bar action button used by both [com.example.ui.screens.BatchReviewScreen]
+ * and [com.example.ui.screens.SingleImageScreen].
+ */
+@Composable
+fun EditorToolButton(
+    icon: ImageVector,
+    label: String,
+    isActive: Boolean = false,
+    testTag: String,
+    tint: Color = Color.White,
+    onClick: () -> Unit
+) {
+    val glass = LocalGlassPalette.current
+    val effectiveTint = if (isActive) glass.accentHighlight else tint
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isActive) glass.accent.copy(alpha = 0.35f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 5.dp)
+            .testTag(testTag)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = effectiveTint,
+            modifier = Modifier.size(21.dp)
+        )
+        androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(3.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = effectiveTint,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+

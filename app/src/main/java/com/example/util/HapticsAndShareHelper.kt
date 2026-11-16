@@ -1,7 +1,9 @@
 package com.example.util
 
+import android.app.Activity
 import android.content.ContentValues
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -10,13 +12,38 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.MediaStore
+import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.View
 import androidx.core.content.FileProvider
+import androidx.credentials.ClearCredentialStateRequest
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import com.example.R
 import com.example.data.ScanEntity
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+import com.google.firebase.Firebase
+import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.auth
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+
+tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 /**
  * Provides subtle, non-blocking haptic feedback for every actionable press, a distinct shutter
@@ -416,4 +443,172 @@ object HapticsAndShareHelper {
             context.startActivity(intent)
         }
     }
+
+    /**
+     * Extracts incoming shared image [Uri]s from an `ACTION_SEND` or `ACTION_SEND_MULTIPLE` [Intent]
+     * so users can share photos from Gallery/WhatsApp/Files directly into Kagojpotro.
+     */
+    fun extractSharedImageUris(intent: Intent?): List<Uri> {
+        if (intent == null) return emptyList()
+        val action = intent.action ?: return emptyList()
+        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return emptyList()
+        val type = intent.type.orEmpty()
+        if (type.isNotBlank() && !type.startsWith("image/", ignoreCase = true) && type != "*/*") {
+            return emptyList()
+        }
+        val collected = LinkedHashSet<Uri>()
+        if (action == Intent.ACTION_SEND) {
+            val single = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+            }
+            if (single != null) collected.add(single)
+        } else if (action == Intent.ACTION_SEND_MULTIPLE) {
+            val multi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+            }
+            multi?.forEach { uri -> collected.add(uri) }
+        }
+        intent.clipData?.let { clip ->
+            for (i in 0 until clip.itemCount) {
+                clip.getItemAt(i)?.uri?.let { u -> collected.add(u) }
+            }
+        }
+        return collected.toList()
+    }
+
+    /**
+     * Shared interactive Google Sign-In flow via Jetpack Credential Manager + Firebase Auth.
+     */
+    fun performGoogleCredentialSignIn(
+        context: Context,
+        credentialManager: CredentialManager,
+        scope: CoroutineScope,
+        onAuthSuccess: (String) -> Unit,
+        onAuthError: (String) -> Unit,
+        onAuthCancelled: () -> Unit = {}
+    ) {
+        val clientId = try {
+            context.getString(R.string.default_web_client_id)
+        } catch (e: Exception) {
+            onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
+            return
+        }
+
+        val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(signInOption)
+            .build()
+
+        val activity = context.findActivity()
+        if (activity == null) {
+            onAuthError("Unable to access current window for Google Sign-In")
+            return
+        }
+
+        scope.launch {
+            try {
+                val result = credentialManager.getCredential(activity, request)
+                val credential = result.credential
+                if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                    val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data)
+                    val authCredential = GoogleAuthProvider.getCredential(googleIdToken.idToken, null)
+                    val authResult = Firebase.auth.signInWithCredential(authCredential).await()
+                    val email = authResult.user?.email ?: googleIdToken.id
+                    onAuthSuccess(email)
+                } else {
+                    onAuthError("Unexpected credential type")
+                }
+            } catch (e: GetCredentialCancellationException) {
+                Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
+                onAuthCancelled()
+            } catch (e: Exception) {
+                Log.e("Auth", "Google Sign-In failed", e)
+                onAuthError(e.localizedMessage ?: "Sign in failed")
+            }
+        }
+    }
+
+    /**
+     * Shared silent auto sign-in check when Google Cloud Sync mode is active.
+     */
+    fun attemptGoogleAutoSignIn(
+        context: Context,
+        credentialManager: CredentialManager,
+        scope: CoroutineScope,
+        onAuthSuccess: (String) -> Unit,
+        onUnauthenticated: () -> Unit = {}
+    ) {
+        val existingUser = Firebase.auth.currentUser
+        if (existingUser != null && !existingUser.email.isNullOrBlank()) {
+            onAuthSuccess(existingUser.email.orEmpty())
+            return
+        }
+        val clientId = try {
+            context.getString(R.string.default_web_client_id)
+        } catch (e: Exception) {
+            onUnauthenticated()
+            return
+        }
+
+        val googleIdOption = GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(true)
+            .setServerClientId(clientId)
+            .setAutoSelectEnabled(true)
+            .build()
+
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(googleIdOption)
+            .build()
+
+        val hostActivity = context.findActivity()
+        if (hostActivity == null) {
+            onUnauthenticated()
+            return
+        }
+        scope.launch {
+            try {
+                val result = credentialManager.getCredential(hostActivity, request)
+                val credential = result.credential
+                if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                    val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data)
+                    val authCredential = GoogleAuthProvider.getCredential(googleIdToken.idToken, null)
+                    val authResult = Firebase.auth.signInWithCredential(authCredential).await()
+                    val email = authResult.user?.email ?: googleIdToken.id
+                    onAuthSuccess(email)
+                } else {
+                    onUnauthenticated()
+                }
+            } catch (e: Exception) {
+                onUnauthenticated()
+            }
+        }
+    }
+
+    /**
+     * Clears CredentialManager state on Google Sign-Out.
+     */
+    fun signOutGoogleCredential(
+        credentialManager: CredentialManager,
+        scope: CoroutineScope,
+        onSignOutComplete: () -> Unit = {}
+    ) {
+        scope.launch {
+            withContext(NonCancellable) {
+                try {
+                    credentialManager.clearCredentialState(ClearCredentialStateRequest())
+                } catch (e: Exception) {
+                    Log.w("Auth", "Failed to clear credential state: ${e.message}")
+                } finally {
+                    onSignOutComplete()
+                }
+            }
+        }
+    }
 }
+

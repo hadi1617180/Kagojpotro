@@ -300,52 +300,23 @@ fun StartupOnboardingScreen(
                             HapticsAndShareHelper.performConfirm(view)
                             googleErrorText = null
                             isGoogleSigningIn = true
-
-                            val clientId = try {
-                                context.getString(R.string.default_web_client_id)
-                            } catch (e: Exception) {
-                                isGoogleSigningIn = false
-                                googleErrorText = "Client configuration missing"
-                                return@clickable
-                            }
-
-                            val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
-                            val request = GetCredentialRequest.Builder()
-                                .addCredentialOption(signInOption)
-                                .build()
-
-                            val activity = context.findActivity()
-                            if (activity == null) {
-                                isGoogleSigningIn = false
-                                googleErrorText = "Unable to access current window for Google Sign-In"
-                                return@clickable
-                            }
-
                             onSuppressResumeLock()
-                            coroutineScope.launch {
-                                try {
-                                    val result = credentialManager.getCredential(activity, request)
-                                    val credential = result.credential
-                                    if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                                        val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data)
-                                        val authCredential = GoogleAuthProvider.getCredential(googleIdToken.idToken, null)
-                                        val authResult = Firebase.auth.signInWithCredential(authCredential).await()
-                                        val email = authResult.user?.email ?: googleIdToken.id
-                                        isGoogleSigningIn = false
-                                        onCompleteWithGoogle(email, {}) {}
-                                    } else {
-                                        isGoogleSigningIn = false
-                                        googleErrorText = "Unexpected credential"
-                                    }
-                                } catch (e: GetCredentialCancellationException) {
-                                    Log.w("StartupAuth", "Google sign-in cancelled: ${e.message}")
+                            HapticsAndShareHelper.performGoogleCredentialSignIn(
+                                context = context,
+                                credentialManager = credentialManager,
+                                scope = coroutineScope,
+                                onAuthSuccess = { email ->
                                     isGoogleSigningIn = false
-                                } catch (e: Exception) {
-                                    Log.e("StartupAuth", "Google sign-in failed", e)
+                                    onCompleteWithGoogle(email, {}) {}
+                                },
+                                onAuthError = { errMsg ->
                                     isGoogleSigningIn = false
-                                    googleErrorText = e.localizedMessage ?: "Sign-in failed"
+                                    googleErrorText = errMsg
+                                },
+                                onAuthCancelled = {
+                                    isGoogleSigningIn = false
                                 }
-                            }
+                            )
                         }
                         .testTag("startup_button_google_signin")
                 ) {
@@ -661,8 +632,3 @@ fun StartupOnboardingScreen(
     }
 }
 
-private tailrec fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-}

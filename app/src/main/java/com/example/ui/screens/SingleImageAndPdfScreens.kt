@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -44,12 +43,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.AutoFixNormal
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -114,6 +116,7 @@ import com.example.processing.DocumentImageProcessor
 import com.example.processing.SmartDocumentEraser
 import com.example.ui.components.CropOriginalOverlay
 import com.example.ui.components.DeleteImagesConfirmDialog
+import com.example.ui.components.EditorToolButton
 import com.example.ui.components.FloatingOverlayIconButton
 import com.example.ui.components.ImageNameDialog
 import com.example.ui.components.UltraThinLineSlider
@@ -185,7 +188,10 @@ fun SingleImageScreen(
         pageCount = { pages.size }
     )
 
+    var isCurrentPageZoomed by remember { mutableStateOf(false) }
+
     LaunchedEffect(pagerState.currentPage, pages) {
+        isCurrentPageZoomed = false
         val currentPageScan = pages.getOrNull(pagerState.currentPage)
         if (currentPageScan != null && currentPageScan.id != scan.id) {
             onSelectScanId(currentPageScan.id)
@@ -194,7 +200,6 @@ fun SingleImageScreen(
 
     val activeScan = pages.getOrNull(pagerState.currentPage) ?: scan
 
-    var isCurrentPageZoomed by remember { mutableStateOf(false) }
     var showCropModal by remember { mutableStateOf(false) }
     var showFilterStrip by remember { mutableStateOf(false) }
     var showEraserBar by remember { mutableStateOf(false) }
@@ -304,9 +309,9 @@ fun SingleImageScreen(
             if (!File(activeScan.originalPath).exists()) {
                 onEnsureHighResOnDemand(activeScan, true)
             }
-            decodeSampledBitmapSingle(activeScan.originalPath, 2800)
-                ?: decodeSampledBitmapSingle(activeScan.editedPath, 2800)
-                ?: decodeSampledBitmapSingle(activeScan.thumbnailPath, 2800)
+            DocumentImageProcessor.decodeSampledBitmapWithExif(activeScan.originalPath, 2800)
+                ?: DocumentImageProcessor.decodeSampledBitmapWithExif(activeScan.editedPath, 2800)
+                ?: DocumentImageProcessor.decodeSampledBitmapWithExif(activeScan.thumbnailPath, 2800)
         }
     }
 
@@ -457,7 +462,7 @@ fun SingleImageScreen(
                         }
                         if (editedExists) {
                             val decoded = withContext(Dispatchers.IO) {
-                                decodeSampledBitmapSingle(pageScan.editedPath, 2800)
+                                DocumentImageProcessor.decodeSampledBitmapWithExif(pageScan.editedPath, 2800)
                             }
                             if (decoded != null && (immediateBitmaps[pageScan.id] == null ||
                                     immediateRotations[pageScan.id] == null ||
@@ -469,8 +474,8 @@ fun SingleImageScreen(
                         } else {
                             // Immediately display cached preview offline when PC/Cloud copy is evicted
                             val previewBmp = withContext(Dispatchers.IO) {
-                                decodeSampledBitmapSingle(pageScan.thumbnailPath, 2800)
-                                    ?: decodeSampledBitmapSingle(pageScan.originalPath, 2800)
+                                DocumentImageProcessor.decodeSampledBitmapWithExif(pageScan.thumbnailPath, 2800)
+                                    ?: DocumentImageProcessor.decodeSampledBitmapWithExif(pageScan.originalPath, 2800)
                             }
                             if (previewBmp != null && immediateBitmaps[pageScan.id] == null) {
                                 immediateBitmaps[pageScan.id] = previewBmp
@@ -481,7 +486,7 @@ fun SingleImageScreen(
                             val restoredHighRes = onEnsureHighResOnDemand(pageScan, false)
                             if (restoredHighRes) {
                                 val fullBmp = withContext(Dispatchers.IO) {
-                                    decodeSampledBitmapSingle(pageScan.editedPath, 2800)
+                                    DocumentImageProcessor.decodeSampledBitmapWithExif(pageScan.editedPath, 2800)
                                 }
                                 if (fullBmp != null) {
                                     immediateBitmaps[pageScan.id] = fullBmp
@@ -587,6 +592,78 @@ fun SingleImageScreen(
                                         color = Color.White
                                     )
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // Top-Center: Floating Page Indicator & Quick Previous/Next Stepper Pill when folder has multiple images
+                if (pages.size > 1 && !showEraserBar) {
+                    val canPrev = pagerState.currentPage > 0
+                    val canNext = pagerState.currentPage < pages.lastIndex
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.48f),
+                        shape = RoundedCornerShape(24.dp),
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 6.dp)
+                            .testTag("single_image_page_indicator")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    if (canPrev) {
+                                        HapticsAndShareHelper.tapTick(view)
+                                        scope.launch {
+                                            pagerState.animateScrollToPage(pagerState.currentPage - 1)
+                                        }
+                                    }
+                                },
+                                enabled = canPrev,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("single_image_prev_page_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                    contentDescription = "Previous image",
+                                    tint = if (canPrev) Color.White else Color.White.copy(alpha = 0.30f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Text(
+                                text = "${pagerState.currentPage + 1} / ${pages.size}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+
+                            IconButton(
+                                onClick = {
+                                    if (canNext) {
+                                        HapticsAndShareHelper.tapTick(view)
+                                        scope.launch {
+                                            pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                                        }
+                                    }
+                                },
+                                enabled = canNext,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("single_image_next_page_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = "Next image",
+                                    tint = if (canNext) Color.White else Color.White.copy(alpha = 0.30f),
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
                         }
                     }
@@ -881,7 +958,7 @@ fun SingleImageScreen(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                SingleEditActionItem(
+                EditorToolButton(
                     icon = Icons.Default.DriveFileRenameOutline,
                     label = strings.rename,
                     isActive = showRenameDialog,
@@ -891,7 +968,7 @@ fun SingleImageScreen(
                         showRenameDialog = true
                     }
                 )
-                SingleEditActionItem(
+                EditorToolButton(
                     icon = Icons.Default.Crop,
                     label = strings.cropOriginal,
                     isActive = showCropModal,
@@ -903,7 +980,7 @@ fun SingleImageScreen(
                         showCropModal = true
                     }
                 )
-                SingleEditActionItem(
+                EditorToolButton(
                     icon = Icons.Default.AutoFixHigh,
                     label = strings.filters,
                     isActive = showFilterStrip,
@@ -915,7 +992,7 @@ fun SingleImageScreen(
                         if (next) showEraserBar = false
                     }
                 )
-                SingleEditActionItem(
+                EditorToolButton(
                     icon = Icons.Default.AutoFixNormal,
                     label = strings.smartEraser,
                     isActive = showEraserBar,
@@ -927,7 +1004,7 @@ fun SingleImageScreen(
                         if (next) showFilterStrip = false
                     }
                 )
-                SingleEditActionItem(
+                EditorToolButton(
                     icon = Icons.Default.Delete,
                     label = strings.delete,
                     isActive = false,
@@ -1099,49 +1176,10 @@ fun SingleImageScreen(
     }
 }
 
-@Composable
-private fun SingleEditActionItem(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    isActive: Boolean = false,
-    testTag: String,
-    tint: Color = Color.White,
-    onClick: () -> Unit
-) {
-    val glass = LocalGlassPalette.current
-    val effectiveTint = if (isActive) glass.accentHighlight else tint
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier
-            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (isActive) glass.accent.copy(alpha = 0.35f) else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 5.dp)
-            .testTag(testTag)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = effectiveTint,
-            modifier = Modifier.size(21.dp)
-        )
-        Spacer(modifier = Modifier.height(3.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = effectiveTint,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
 /**
  * Make PDF Screen:
  * - Shows numbered thumbnails of the selected images starting in their current gallery order
- * - Supports drag-to-reorder plus accessible move-up and move-down buttons
+ * - Supports drag-to-reorder plus accessible move-up, move-down, and remove-page buttons
  * - Lets the user name the PDF and choose between Fit to Image and Standard A4
  * - Exports one page per image using the edited full-resolution result, with correct orientation,
  *   preserved aspect ratio, and no clipped content
@@ -1157,6 +1195,7 @@ fun PdfBuilderScreen(
     onUpdateFilename: (String) -> Unit,
     onUpdatePageFormat: (PdfPageFormat) -> Unit,
     onMovePage: (Int, Int) -> Unit,
+    onRemovePage: (Int) -> Unit = {},
     onExportAndShare: () -> Unit,
     onExportAndDownload: () -> Unit,
     onBack: () -> Unit
@@ -1240,6 +1279,7 @@ fun PdfBuilderScreen(
                         value = pdfFilename,
                         onValueChange = onUpdateFilename,
                         label = { Text(strings.pdfFilenameLabel) },
+                        placeholder = { Text("Kagojpotro_Document") },
                         singleLine = true,
                         suffix = { Text(".pdf", color = glass.textSecondary) },
                         modifier = Modifier
@@ -1454,6 +1494,24 @@ fun PdfBuilderScreen(
                                     tint = if (index < orderedScans.lastIndex) glass.accent else glass.textSecondary.copy(alpha = 0.35f)
                                 )
                             }
+
+                            if (orderedScans.size > 1) {
+                                IconButton(
+                                    onClick = {
+                                        HapticsAndShareHelper.tapTick(view)
+                                        onRemovePage(index)
+                                    },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("pdf_remove_page_$index")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Remove page ${index + 1} from PDF",
+                                        tint = glass.textSecondary
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1540,30 +1598,3 @@ fun PdfBuilderScreen(
     }
 }
 
-private fun decodeSampledBitmapSingle(path: String, maxDim: Int): Bitmap? {
-    if (path.isBlank()) return null
-    val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(path, boundsOpts)
-    val srcW = boundsOpts.outWidth
-    val srcH = boundsOpts.outHeight
-    if (srcW <= 0 || srcH <= 0) {
-        return BitmapFactory.decodeFile(path)
-    }
-    var inSample = 1
-    while (maxOf(srcW / inSample, srcH / inSample) > maxDim * 2) {
-        inSample *= 2
-    }
-    val decodeOpts = BitmapFactory.Options().apply {
-        inSampleSize = inSample
-        inPreferredConfig = Bitmap.Config.ARGB_8888
-    }
-    val sampled = BitmapFactory.decodeFile(path, decodeOpts) ?: return null
-    val curMax = maxOf(sampled.width, sampled.height)
-    if (curMax <= maxDim) return sampled
-    val scale = maxDim.toFloat() / curMax.toFloat()
-    val targetW = (sampled.width * scale).toInt().coerceAtLeast(1)
-    val targetH = (sampled.height * scale).toInt().coerceAtLeast(1)
-    return Bitmap.createScaledBitmap(sampled, targetW, targetH, true).also {
-        if (it !== sampled) sampled.recycle()
-    }
-}

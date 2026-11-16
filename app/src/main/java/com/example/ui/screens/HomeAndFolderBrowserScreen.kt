@@ -225,7 +225,6 @@ fun HomeAndFolderBrowserScreen(
     onDeleteFolders: (List<String>) -> Unit = {},
     onStartCameraScan: () -> Unit,
     onImportDeviceUris: (List<android.net.Uri>) -> Unit,
-    onImportSampleSheet: () -> Unit,
     onThumbnailTapped: (ScanEntity) -> Unit,
     onThumbnailLongPressed: (ScanEntity) -> Unit,
     onSetScanSelection: (Set<String>) -> Unit = {},

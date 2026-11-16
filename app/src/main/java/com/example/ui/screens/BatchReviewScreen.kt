@@ -97,7 +97,9 @@ import com.example.data.AppStrings
 import com.example.data.DraftScanItem
 import com.example.data.NormalizedQuad
 import com.example.data.ScanFilter
+import com.example.processing.DocumentImageProcessor
 import com.example.ui.components.CropOriginalOverlay
+import com.example.ui.components.EditorToolButton
 import com.example.ui.components.FloatingOverlayIconButton
 import com.example.ui.components.UltraThinLineSlider
 import com.example.ui.components.VerticalEraserHistoryColumn
@@ -208,7 +210,7 @@ fun BatchReviewScreen(
         }
         value = withContext(Dispatchers.IO) {
             selectedItem?.originalPath?.let { path ->
-                decodeSampledBitmapBatch(path, 2800)
+                DocumentImageProcessor.decodeSampledBitmapWithExif(path, 2800)
             }
         }
     }
@@ -1007,68 +1009,3 @@ fun BatchReviewScreen(
     }
 }
 
-@Composable
-private fun EditorToolButton(
-    icon: ImageVector,
-    label: String,
-    isActive: Boolean,
-    testTag: String,
-    tint: Color = Color.White,
-    onClick: () -> Unit
-) {
-    val glass = LocalGlassPalette.current
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier
-            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (isActive) glass.accent.copy(alpha = 0.35f) else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 5.dp)
-            .testTag(testTag)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = if (isActive) glass.accentHighlight else tint,
-            modifier = Modifier.size(21.dp)
-        )
-        Spacer(modifier = Modifier.height(3.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (isActive) glass.accentHighlight else tint,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-private fun decodeSampledBitmapBatch(path: String, maxDim: Int): Bitmap? {
-    if (path.isBlank()) return null
-    val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(path, boundsOpts)
-    val srcW = boundsOpts.outWidth
-    val srcH = boundsOpts.outHeight
-    if (srcW <= 0 || srcH <= 0) {
-        return BitmapFactory.decodeFile(path)
-    }
-    var inSample = 1
-    while (maxOf(srcW / inSample, srcH / inSample) > maxDim * 2) {
-        inSample *= 2
-    }
-    val decodeOpts = BitmapFactory.Options().apply {
-        inSampleSize = inSample
-        inPreferredConfig = Bitmap.Config.ARGB_8888
-    }
-    val sampled = BitmapFactory.decodeFile(path, decodeOpts) ?: return null
-    val curMax = maxOf(sampled.width, sampled.height)
-    if (curMax <= maxDim) return sampled
-    val scale = maxDim.toFloat() / curMax.toFloat()
-    val targetW = (sampled.width * scale).toInt().coerceAtLeast(1)
-    val targetH = (sampled.height * scale).toInt().coerceAtLeast(1)
-    return Bitmap.createScaledBitmap(sampled, targetW, targetH, true).also {
-        if (it !== sampled) sampled.recycle()
-    }
-}

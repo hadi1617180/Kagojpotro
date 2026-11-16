@@ -2,6 +2,7 @@ package com.example.processing
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
@@ -9,8 +10,10 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
+import androidx.exifinterface.media.ExifInterface
 import com.example.data.NormalizedQuad
 import com.example.data.ScanFilter
+import java.io.File
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.acos
@@ -38,6 +41,61 @@ object DocumentImageProcessor {
     }
 
     fun isAiEnhanceReady(): Boolean = AiDocumentEnhancer.isModelAssetPresent()
+
+    /**
+     * Memory-safe, EXIF-orientation-aware sampled bitmap decoder shared across SingleImageScreen,
+     * BatchReviewScreen, and CameraCaptureScreen. Uses orthogonal pixel rotation (`rotateBitmap`)
+     * so both device runtime and Robolectric tests preserve orientation cleanly.
+     */
+    fun decodeSampledBitmapWithExif(path: String, maxDim: Int): Bitmap? {
+        if (path.isBlank()) return null
+        return runCatching {
+            val file = File(path)
+            if (!file.exists() || file.length() == 0L) return null
+            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, boundsOpts)
+            val srcW = boundsOpts.outWidth
+            val srcH = boundsOpts.outHeight
+            var inSample = 1
+            if (srcW > 0 && srcH > 0) {
+                while (maxOf(srcW / inSample, srcH / inSample) > maxDim * 2) {
+                    inSample *= 2
+                }
+            }
+            val decodeOpts = BitmapFactory.Options().apply {
+                inSampleSize = inSample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            val sampled = BitmapFactory.decodeFile(path, decodeOpts) ?: return null
+            val exifOrientation = runCatching {
+                ExifInterface(path).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+            }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+            val exifDegrees = when (exifOrientation) {
+                ExifInterface.ORIENTATION_ROTATE_90, ExifInterface.ORIENTATION_TRANSPOSE -> 90
+                ExifInterface.ORIENTATION_ROTATE_180, ExifInterface.ORIENTATION_FLIP_VERTICAL -> 180
+                ExifInterface.ORIENTATION_ROTATE_270, ExifInterface.ORIENTATION_TRANSVERSE -> 270
+                else -> 0
+            }
+            val oriented = if (exifDegrees != 0) {
+                val rot = rotateBitmap(sampled, exifDegrees)
+                if (rot !== sampled && !sampled.isRecycled) sampled.recycle()
+                rot
+            } else {
+                sampled
+            }
+            val curMax = maxOf(oriented.width, oriented.height)
+            if (curMax <= maxDim) return@runCatching oriented
+            val scale = maxDim.toFloat() / curMax.toFloat()
+            val targetW = (oriented.width * scale).toInt().coerceAtLeast(1)
+            val targetH = (oriented.height * scale).toInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(oriented, targetW, targetH, true).also {
+                if (it !== oriented && !oriented.isRecycled) oriented.recycle()
+            }
+        }.getOrNull()
+    }
 
     private data class HullPoint(val x: Int, val y: Int) : Comparable<HullPoint> {
         override fun compareTo(other: HullPoint): Int {

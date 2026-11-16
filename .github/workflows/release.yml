@@ -142,7 +142,12 @@ jobs:
           body: |
             ### Kagojpotro v${{ steps.version.outputs.version_name }} (Build ${{ steps.version.outputs.version_code }})
             - Download **`Kagojpotro-v${{ steps.version.outputs.version_name }}.apk`** below to install or update the Android app.
-            - Existing users can also update directly inside the app via **Settings → Update → Check for update**.
+            - Existing users can update directly inside the app via **Settings → Update → Check for update**.
+            - **What's New**:
+              - Direct **Share to Kagojpotro** from phone Gallery / other apps (`image/*`).
+              - Single Image Viewer `< 1 / N >` floating page indicator pill & smooth zoom-reset swiping.
+              - **Remove Page (`X`)** button in PDF Builder without deleting saved scans.
+              - EXIF orientation-aware high-res bitmap decoding & In-App Updater cache tag verification.
           draft: false
           prerelease: false
           make_latest: true

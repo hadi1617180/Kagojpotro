@@ -264,7 +264,6 @@ fun SettingsScreen(
     appUpdateState: AppUpdateUiState = AppUpdateUiState(),
     onCheckForAppUpdate: (String?) -> Unit = {},
     onDownloadAndInstallAppUpdate: () -> Unit = {},
-    onSetGithubRepoSlug: (String) -> Unit = {},
     onOpenAppUpdateDialog: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -362,7 +361,7 @@ fun SettingsScreen(
         if (pcSyncConfig.mode == AppStorageSyncMode.GOOGLE_CLOUD_SYNC &&
             googleDriveStatus.connectedEmail.isBlank()
         ) {
-            attemptAutoSignIn(
+            HapticsAndShareHelper.attemptGoogleAutoSignIn(
                 context = context,
                 credentialManager = credentialManager,
                 scope = coroutineScope,
@@ -375,6 +374,18 @@ fun SettingsScreen(
                 onUnauthenticated = {}
             )
         }
+    }
+
+    fun signOutGoogle(
+        credentialManager: CredentialManager,
+        scope: kotlinx.coroutines.CoroutineScope,
+        onSignOutComplete: () -> Unit = {}
+    ) {
+        HapticsAndShareHelper.signOutGoogleCredential(
+            credentialManager = credentialManager,
+            scope = scope,
+            onSignOutComplete = onSignOutComplete
+        )
     }
 
     BackHandler(onBack = onBack)
@@ -966,7 +977,7 @@ fun SettingsScreen(
                                                 HapticsAndShareHelper.performConfirm(view)
                                                 onSuppressResumeLock()
                                                 isGoogleSigningIn = true
-                                                onGoogleSignInClicked(
+                                                HapticsAndShareHelper.performGoogleCredentialSignIn(
                                                     context = context,
                                                     credentialManager = credentialManager,
                                                     scope = coroutineScope,
@@ -1129,7 +1140,7 @@ fun SettingsScreen(
                                             OutlinedButton(
                                                 onClick = {
                                                     HapticsAndShareHelper.performTick(view)
-                                                    signOutGoogle(
+                                                    HapticsAndShareHelper.signOutGoogleCredential(
                                                         credentialManager = credentialManager,
                                                         scope = coroutineScope,
                                                         onSignOutComplete = onDisconnectGoogleDriveAccount
@@ -2360,131 +2371,6 @@ fun SettingsScreen(
     }
 }
 
-private fun attemptAutoSignIn(
-    context: Context,
-    credentialManager: CredentialManager,
-    scope: CoroutineScope,
-    onAuthSuccess: (String) -> Unit,
-    onUnauthenticated: () -> Unit
-) {
-    val existingUser = Firebase.auth.currentUser
-    if (existingUser != null && !existingUser.email.isNullOrBlank()) {
-        onAuthSuccess(existingUser.email.orEmpty())
-        return
-    }
-    val clientId = try {
-        context.getString(R.string.default_web_client_id)
-    } catch (e: Exception) {
-        onUnauthenticated()
-        return
-    }
-
-    val googleIdOption = GetGoogleIdOption.Builder()
-        .setFilterByAuthorizedAccounts(true)
-        .setServerClientId(clientId)
-        .setAutoSelectEnabled(true)
-        .build()
-
-    val request = GetCredentialRequest.Builder()
-        .addCredentialOption(googleIdOption)
-        .build()
-
-    val hostActivity = context.findActivity()
-    if (hostActivity == null) {
-        onUnauthenticated()
-        return
-    }
-    scope.launch {
-        try {
-            val result = credentialManager.getCredential(hostActivity, request)
-            val credential = result.credential
-            if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data)
-                val authCredential = GoogleAuthProvider.getCredential(googleIdToken.idToken, null)
-                val authResult = Firebase.auth.signInWithCredential(authCredential).await()
-                val email = authResult.user?.email ?: googleIdToken.id
-                onAuthSuccess(email)
-            } else {
-                onUnauthenticated()
-            }
-        } catch (e: Exception) {
-            onUnauthenticated()
-        }
-    }
-}
-
-private fun onGoogleSignInClicked(
-    context: Context,
-    credentialManager: CredentialManager,
-    scope: CoroutineScope,
-    onAuthSuccess: (String) -> Unit,
-    onAuthError: (String) -> Unit,
-    onAuthCancelled: () -> Unit = {}
-) {
-    val clientId = try {
-        context.getString(R.string.default_web_client_id)
-    } catch (e: Exception) {
-        onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
-        return
-    }
-
-    val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
-    val request = GetCredentialRequest.Builder()
-        .addCredentialOption(signInOption)
-        .build()
-
-    val activity = context.findActivity()
-    if (activity == null) {
-        onAuthError("Unable to access current window for Google Sign-In")
-        return
-    }
-
-    scope.launch {
-        try {
-            val result = credentialManager.getCredential(activity, request)
-            val credential = result.credential
-            if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data)
-                val authCredential = GoogleAuthProvider.getCredential(googleIdToken.idToken, null)
-                val authResult = Firebase.auth.signInWithCredential(authCredential).await()
-                val email = authResult.user?.email ?: googleIdToken.id
-                onAuthSuccess(email)
-            } else {
-                onAuthError("Unexpected credential type")
-            }
-        } catch (e: GetCredentialCancellationException) {
-            Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
-            onAuthCancelled()
-        } catch (e: Exception) {
-            Log.e("Auth", "Google Sign-In failed", e)
-            onAuthError(e.localizedMessage ?: "Sign in failed")
-        }
-    }
-}
-
-private tailrec fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-}
-
-private fun signOutGoogle(
-    credentialManager: CredentialManager,
-    scope: CoroutineScope,
-    onSignOutComplete: () -> Unit = {}
-) {
-    scope.launch {
-        withContext(NonCancellable) {
-            try {
-                credentialManager.clearCredentialState(ClearCredentialStateRequest())
-            } catch (e: Exception) {
-                Log.w("Auth", "Failed to clear credential state: ${e.message}")
-            } finally {
-                onSignOutComplete()
-            }
-        }
-    }
-}
 
 @Composable
 fun PcStatusLightPill(

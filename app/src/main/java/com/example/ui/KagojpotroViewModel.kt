@@ -1232,18 +1232,6 @@ class KagojpotroViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    fun setGithubUpdateRepoSlug(rawRepoSlug: String) {
-        viewModelScope.launch {
-            val clean = repository.setGithubRepoSlug(rawRepoSlug)
-            _appUpdateState.update {
-                it.copy(
-                    repoSlug = clean,
-                    lastError = null
-                )
-            }
-        }
-    }
-
     fun dismissAppUpdateDialog() {
         _appUpdateState.update { it.copy(showUpdateDialog = false) }
     }
@@ -1265,7 +1253,7 @@ class KagojpotroViewModel(application: Application) : AndroidViewModel(applicati
                 .ifBlank { GithubReleaseUpdater.DEFAULT_GITHUB_REPO }
             val normalized = GithubReleaseUpdater.normalizeRepoSlug(targetRepo)
             if (normalized.isBlank()) {
-                val msg = if (isBn) "সঠিক GitHub রিপোজিটরি লিখুন (যেমন owner/repo)" else "Enter a valid GitHub repo (owner/repo)"
+                val msg = if (isBn) "সঠিক রিপোজিটরি পাওয়া যায়নি" else "Invalid update repository"
                 _appUpdateState.update { it.copy(lastError = msg, lastStatusMessage = msg) }
                 if (manualUserInitiated) showStatusToast(msg)
                 return@launch
@@ -1284,16 +1272,28 @@ class KagojpotroViewModel(application: Application) : AndroidViewModel(applicati
             when (val res = repository.githubReleaseUpdater.checkForLatestRelease(normalized)) {
                 is GithubUpdateCheckResult.UpdateAvailable -> {
                     val info = res.info
+                    val safeTag = info.tagName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                        .ifBlank { "latest" }
+                    val expectedApkName = "Kagojpotro_update_${safeTag}.apk"
                     val statusMsg = if (isBn) {
                         "নতুন আপডেট পাওয়া গেছে: v${info.remoteVersionName}"
                     } else {
                         "New update available: v${info.remoteVersionName}"
                     }
-                    _appUpdateState.update {
-                        it.copy(
+                    _appUpdateState.update { cur ->
+                        val cachedPath = cur.downloadedApkFilePath
+                        val validCachedPath = if (!cachedPath.isNullOrBlank() &&
+                            File(cachedPath).let { f -> f.name == expectedApkName && f.exists() && f.length() > 1024L }
+                        ) {
+                            cachedPath
+                        } else {
+                            null
+                        }
+                        cur.copy(
                             isChecking = false,
                             availableUpdate = info,
                             latestCheckedInfo = info,
+                            downloadedApkFilePath = validCachedPath,
                             showUpdateDialog = true,
                             lastStatusMessage = statusMsg,
                             lastError = null
@@ -1312,6 +1312,7 @@ class KagojpotroViewModel(application: Application) : AndroidViewModel(applicati
                             isChecking = false,
                             availableUpdate = null,
                             latestCheckedInfo = info,
+                            downloadedApkFilePath = null,
                             showUpdateDialog = false,
                             lastStatusMessage = statusMsg,
                             lastError = null
@@ -1322,14 +1323,16 @@ class KagojpotroViewModel(application: Application) : AndroidViewModel(applicati
                     }
                 }
                 is GithubUpdateCheckResult.Error -> {
+                    val hasCachedUpdate = _appUpdateState.value.availableUpdate != null
                     _appUpdateState.update {
                         it.copy(
                             isChecking = false,
+                            showUpdateDialog = if (manualUserInitiated && hasCachedUpdate) true else it.showUpdateDialog,
                             lastStatusMessage = res.message,
                             lastError = res.message
                         )
                     }
-                    if (manualUserInitiated) {
+                    if (manualUserInitiated && !hasCachedUpdate) {
                         showStatusToast(res.message)
                     }
                 }
@@ -1343,14 +1346,19 @@ class KagojpotroViewModel(application: Application) : AndroidViewModel(applicati
         val updateInfo = state.availableUpdate ?: return
         val apkAsset = updateInfo.apkAsset
         val isBn = appLanguage.value == AppLanguage.BN
+        val safeTag = updateInfo.tagName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            .ifBlank { "latest" }
+        val expectedApkName = "Kagojpotro_update_${safeTag}.apk"
 
         val existingPath = state.downloadedApkFilePath
         if (!existingPath.isNullOrBlank()) {
             val existingFile = File(existingPath)
-            if (existingFile.exists() && existingFile.length() > 1024L) {
+            if (existingFile.name == expectedApkName && existingFile.exists() && existingFile.length() > 1024L) {
                 suppressNextResumeLock()
                 repository.githubReleaseUpdater.launchApkInstaller(existingFile)
                 return
+            } else {
+                _appUpdateState.update { it.copy(downloadedApkFilePath = null) }
             }
         }
 
@@ -2899,7 +2907,11 @@ class KagojpotroViewModel(application: Application) : AndroidViewModel(applicati
         val folderName = _currentFolderId.value?.let { fid ->
             allFolders.value.find { it.id == fid }?.name
         } ?: "Kagojpotro"
-        _pdfFilename.value = "${folderName.replace(" ", "_")}_PDF"
+        val cleanBase = folderName.trim()
+            .replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1F\\s]+"), "_")
+            .trim('_')
+            .ifBlank { "Kagojpotro" }
+        _pdfFilename.value = "${cleanBase}_PDF"
         _lastExportedPdfFile.value = null
         _activeScreen.value = AppScreen.PDF_BUILDER
     }
@@ -2920,6 +2932,17 @@ class KagojpotroViewModel(application: Application) : AndroidViewModel(applicati
             add(toIndex, item)
         }
         _lastExportedPdfFile.value = null
+    }
+
+    fun removePdfPageAt(index: Int) {
+        val current = _pdfOrderedScans.value
+        if (index !in current.indices) return
+        val updated = current.toMutableList().apply { removeAt(index) }
+        _pdfOrderedScans.value = updated
+        _lastExportedPdfFile.value = null
+        if (updated.isEmpty()) {
+            _activeScreen.value = AppScreen.BROWSER
+        }
     }
 
     fun closePdfBuilder() {

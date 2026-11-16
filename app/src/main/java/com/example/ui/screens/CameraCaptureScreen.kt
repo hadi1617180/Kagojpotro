@@ -1067,7 +1067,7 @@ fun CameraCaptureScreen(
                                 return@produceState
                             }
                             value = withContext(Dispatchers.Default) {
-                                val orig = decodeSampledBitmapFromFile(latestItem.originalPath, 420)
+                                val orig = DocumentImageProcessor.decodeSampledBitmapWithExif(latestItem.originalPath, 420)
                                     ?: return@withContext latestItem.previewBitmap
                                 val rendered = DocumentImageProcessor.renderCroppedOriginal(
                                     original = orig,
@@ -1362,7 +1362,7 @@ fun CameraCaptureScreen(
                                 return@produceState
                             }
                             value = withContext(Dispatchers.Default) {
-                                val orig = decodeSampledBitmapFromFile(pageItem.originalPath, 2400)
+                                val orig = DocumentImageProcessor.decodeSampledBitmapWithExif(pageItem.originalPath, 2400)
                                     ?: return@withContext pageItem.previewBitmap
                                 val cropped = DocumentImageProcessor.renderCroppedOriginal(
                                     original = orig,
@@ -1456,28 +1456,3 @@ fun CameraCaptureScreen(
     }
 }
 
-/**
- * Memory-safe sampled decoder for raw camera preview and thumbnails.
- */
-private fun decodeSampledBitmapFromFile(path: String, maxDim: Int): Bitmap? {
-    return runCatching {
-        val file = File(path)
-        if (!file.exists() || file.length() == 0L) return null
-        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(path, options)
-        val origW = options.outWidth
-        val origH = options.outHeight
-        if (origW <= 0 || origH <= 0) return null
-
-        var sampleSize = 1
-        val longest = maxOf(origW, origH)
-        while (longest / (sampleSize * 2) >= maxDim) {
-            sampleSize *= 2
-        }
-        val decodeOpts = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-        BitmapFactory.decodeFile(path, decodeOpts)
-    }.getOrNull()
-}

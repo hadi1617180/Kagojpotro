@@ -3,6 +3,8 @@ package com.example
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -69,12 +71,32 @@ import com.example.util.HapticsAndShareHelper
 import kotlinx.coroutines.delay
 
 class MainActivity : FragmentActivity() {
+    private var incomingSharedImageUris by mutableStateOf<List<Uri>>(emptyList())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         DocumentImageProcessor.init(applicationContext)
+        if (savedInstanceState == null) {
+            val shared = HapticsAndShareHelper.extractSharedImageUris(intent)
+            if (shared.isNotEmpty()) {
+                incomingSharedImageUris = shared
+            }
+        }
         enableEdgeToEdge()
         setContent {
-            KagojpotroApp()
+            KagojpotroApp(
+                pendingSharedUris = incomingSharedImageUris,
+                onConsumeSharedUris = { incomingSharedImageUris = emptyList() }
+            )
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val shared = HapticsAndShareHelper.extractSharedImageUris(intent)
+        if (shared.isNotEmpty()) {
+            incomingSharedImageUris = shared
         }
     }
 }
@@ -114,7 +136,9 @@ private fun launchBiometricPrompt(
 
 @Composable
 fun KagojpotroApp(
-    viewModel: KagojpotroViewModel = viewModel()
+    viewModel: KagojpotroViewModel = viewModel(),
+    pendingSharedUris: List<Uri> = emptyList(),
+    onConsumeSharedUris: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val isBootstrapped by viewModel.isBootstrapped.collectAsStateWithLifecycle()
@@ -244,6 +268,13 @@ fun KagojpotroApp(
                 viewModel.dismissStatusToast()
             }
         }
+        LaunchedEffect(isBootstrapped, pendingSharedUris) {
+            if (isBootstrapped && pendingSharedUris.isNotEmpty()) {
+                val toImport = pendingSharedUris
+                onConsumeSharedUris()
+                viewModel.importFromDeviceUris(toImport)
+            }
+        }
         val isLockActive = isBootstrapped && isAppLocked
         Box(
             modifier = Modifier
@@ -340,7 +371,6 @@ fun KagojpotroApp(
                     onDeleteFolders = { ids -> viewModel.deleteFolders(ids) },
                     onStartCameraScan = viewModel::startCameraScanFromCurrentLocation,
                     onImportDeviceUris = { uris -> viewModel.importFromDeviceUris(uris) },
-                    onImportSampleSheet = viewModel::importSampleDeviceDocument,
                     onThumbnailTapped = viewModel::onThumbnailTapped,
                     onThumbnailLongPressed = viewModel::onThumbnailLongPressed,
                     onSetScanSelection = viewModel::setScanSelection,
@@ -476,7 +506,6 @@ fun KagojpotroApp(
                         viewModel.checkForGithubAppUpdate(manualUserInitiated = true, customRepoSlug = customRepo)
                     },
                     onDownloadAndInstallAppUpdate = viewModel::downloadAndInstallGithubUpdate,
-                    onSetGithubRepoSlug = viewModel::setGithubUpdateRepoSlug,
                     onOpenAppUpdateDialog = viewModel::openAppUpdateDialog
                 )
             }
@@ -589,6 +618,7 @@ fun KagojpotroApp(
                     onUpdateFilename = viewModel::updatePdfFilename,
                     onUpdatePageFormat = viewModel::updatePdfPageFormat,
                     onMovePage = viewModel::movePdfPage,
+                    onRemovePage = viewModel::removePdfPageAt,
                     onExportAndShare = {
                         viewModel.exportPdfFile { pdfFile ->
                             viewModel.suppressNextResumeLock()

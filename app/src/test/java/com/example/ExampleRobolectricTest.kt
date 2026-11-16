@@ -1954,4 +1954,68 @@ class ExampleRobolectricTest {
             serverThread.join(1000L)
         }
     }
+
+    @Test
+    fun verifyExifSampledDecodeSharedIntentExtractionAndPdfPageRemoval(): Unit = runBlocking {
+        // 1. EXIF-aware sampled bitmap decoding rotates a 320x180 JPEG tagged with ORIENTATION_ROTATE_90 into 180x320
+        val exifFile = File(context.cacheDir, "test_exif_rot90.jpg")
+        val rawBmp = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)
+        exifFile.outputStream().use { out ->
+            rawBmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+        }
+        rawBmp.recycle()
+        val exif = androidx.exifinterface.media.ExifInterface(exifFile.absolutePath)
+        exif.setAttribute(
+            androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+            androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90.toString()
+        )
+        exif.saveAttributes()
+
+        val decoded = DocumentImageProcessor.decodeSampledBitmapWithExif(exifFile.absolutePath, maxDim = 500)
+        assertNotNull("Expected non-null EXIF-decoded bitmap", decoded)
+        assertEquals(180, decoded!!.width)
+        assertEquals(320, decoded.height)
+        decoded.recycle()
+        exifFile.delete()
+
+        // 2. Direct Share Intent URI extraction (ACTION_SEND + ACTION_SEND_MULTIPLE + ClipData)
+        val u1 = Uri.parse("content://com.example.provider/images/doc_1.jpg")
+        val u2 = Uri.parse("content://com.example.provider/images/doc_2.png")
+        val singleShare = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "image/jpeg"
+            putExtra(android.content.Intent.EXTRA_STREAM, u1)
+        }
+        assertEquals(listOf(u1), com.example.util.HapticsAndShareHelper.extractSharedImageUris(singleShare))
+
+        val multiShare = android.content.Intent(android.content.Intent.ACTION_SEND_MULTIPLE).apply {
+            type = "image/*"
+            putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, arrayListOf(u1, u2))
+        }
+        assertEquals(listOf(u1, u2), com.example.util.HapticsAndShareHelper.extractSharedImageUris(multiShare))
+
+        // 3. ViewModel PDF Builder page removal & default filename sanitization
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val vm = KagojpotroViewModel(app)
+        val folder = (repository.createFolder("PDF_Test", null, now = 1700020000000L) as FolderOperationResult.Success).folder
+        val d1 = repository.processDraftItem(
+            repository.createDraftFromBitmap(DocumentImageProcessor.generateSampleCapturedSheet(1, 240, 320), 1700020001000L),
+            detectEdges = false
+        )
+        val d2 = repository.processDraftItem(
+            repository.createDraftFromBitmap(DocumentImageProcessor.generateSampleCapturedSheet(2, 240, 320), 1700020002000L),
+            detectEdges = false
+        )
+        val savedScans = repository.saveDraftBatchToFolder(listOf(d1, d2), folder.id, now = 1700020003000L).getOrThrow()
+        assertEquals(2, savedScans.size)
+
+        vm.toggleScanSelection(savedScans[0].id)
+        vm.toggleScanSelection(savedScans[1].id)
+        vm.openPdfBuilderForSelected(savedScans)
+        assertEquals(2, vm.pdfOrderedScans.value.size)
+        assertTrue(vm.pdfFilename.value.isNotBlank())
+
+        vm.removePdfPageAt(0)
+        assertEquals(listOf(savedScans[1].id), vm.pdfOrderedScans.value.map { it.id })
+    }
 }
+
