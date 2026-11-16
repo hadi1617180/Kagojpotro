@@ -1,0 +1,122 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidCloudFolder(data) {
+      return data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.userId.size() >= 1 &&
+             data.userId.size() <= 128 &&
+             data.name is string &&
+             data.name.size() >= 1 &&
+             data.name.size() <= 200 &&
+             data.parentId is string &&
+             data.parentId.size() <= 128 &&
+             data.sortOrder is int &&
+             data.createdAtMs is int &&
+             data.updatedAtMs is int &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    function isValidCloudScan(data) {
+      return data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.userId.size() >= 1 &&
+             data.userId.size() <= 128 &&
+             data.folderId is string &&
+             data.folderId.size() >= 1 &&
+             data.folderId.size() <= 128 &&
+             data.fileName is string &&
+             data.fileName.size() >= 1 &&
+             data.fileName.size() <= 200 &&
+             data.capturedAt is int &&
+             data.filterName is string &&
+             data.filterName.size() >= 1 &&
+             data.filterName.size() <= 40 &&
+             data.rotationDegrees is int &&
+             data.quadString is string &&
+             data.quadString.size() <= 500 &&
+             data.thumbBase64 is string &&
+             data.thumbBase64.size() <= 750000 &&
+             data.createdAt is timestamp &&
+             data.createdAt <= request.time &&
+             data.updatedAt is timestamp &&
+             data.updatedAt <= request.time;
+    }
+
+    match /users/{userId}/folders/{folderId} {
+      allow get: if isSignedIn() && request.auth.uid == userId && isValidId(userId) && isValidId(folderId);
+      allow list: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       isValidId(userId) &&
+                       isValidId(folderId) &&
+                       incoming().keys().hasAll(['userId', 'name', 'parentId', 'sortOrder', 'createdAtMs', 'updatedAtMs', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'name', 'parentId', 'sortOrder', 'createdAtMs', 'updatedAtMs', 'createdAt', 'updatedAt']) &&
+                       isValidCloudFolder(incoming());
+
+      allow update: if (
+        isSignedIn() &&
+        isValidCloudFolder(incoming()) &&
+        request.auth.uid == userId &&
+        isValidId(userId) &&
+        isValidId(folderId) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'parentId', 'sortOrder', 'createdAtMs', 'updatedAtMs', 'updatedAt'])
+      );
+
+      allow delete: if isSignedIn() && request.auth.uid == userId && isValidId(userId) && isValidId(folderId);
+    }
+
+    match /users/{userId}/scans/{scanId} {
+      allow get: if isSignedIn() && request.auth.uid == userId && isValidId(userId) && isValidId(scanId);
+      allow list: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       isValidId(userId) &&
+                       isValidId(scanId) &&
+                       incoming().keys().hasAll(['userId', 'folderId', 'fileName', 'capturedAt', 'filterName', 'rotationDegrees', 'quadString', 'thumbBase64', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'folderId', 'fileName', 'capturedAt', 'filterName', 'rotationDegrees', 'quadString', 'thumbBase64', 'createdAt', 'updatedAt']) &&
+                       isValidCloudScan(incoming());
+
+      allow update: if (
+        isSignedIn() &&
+        isValidCloudScan(incoming()) &&
+        request.auth.uid == userId &&
+        isValidId(userId) &&
+        isValidId(scanId) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['folderId', 'fileName', 'capturedAt', 'filterName', 'rotationDegrees', 'quadString', 'thumbBase64', 'updatedAt'])
+      );
+
+      allow delete: if isSignedIn() && request.auth.uid == userId && isValidId(userId) && isValidId(scanId);
+    }
+  }
+}

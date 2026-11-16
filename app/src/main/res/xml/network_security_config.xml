@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Local LAN IPv4 addresses (e.g. 192.168.x.x / 10.x.x.x) cannot be matched by domain rules;
+         PcSyncManager strictly enforces LAN-only HTTP vs HTTPS on non-LAN hosts and redirects. -->
+    <base-config cleartextTrafficPermitted="true" />
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">trycloudflare.com</domain>
+        <domain includeSubdomains="true">tinyurl.com</domain>
+        <domain includeSubdomains="true">da.gd</domain>
+        <domain includeSubdomains="true">clck.ru</domain>
+        <domain includeSubdomains="true">spoo.me</domain>
+        <domain includeSubdomains="true">v.gd</domain>
+        <domain includeSubdomains="true">is.gd</domain>
+        <domain includeSubdomains="true">bit.ly</domain>
+        <domain includeSubdomains="true">googleapis.com</domain>
+        <domain includeSubdomains="true">firebaseio.com</domain>
+        <domain includeSubdomains="true">appspot.com</domain>
+    </domain-config>
+</network-security-config>

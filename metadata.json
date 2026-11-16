@@ -1,0 +1,10 @@
+{
+  "name": "Kagojpotro",
+  "description": "Mobile-first document scanning, perspective correction, folder organizing, and PDF export app with Bengali and English support.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

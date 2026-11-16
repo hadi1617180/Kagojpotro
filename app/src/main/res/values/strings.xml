@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">Kagojpotro</string>
+    <string name="app_brand_title">কাগজপত্র</string>
+    <string name="new_folder">New folder</string>
+    <string name="search_folders">Search folders</string>
+    <string name="scan_or_import">Scan or import</string>
+    <string name="scan_images">Scan image(s)</string>
+    <string name="import_from_device">Import from gallery / device</string>
+    <string name="save_as">Save as</string>
+    <string name="save_to_folder">Save to folder</string>
+    <string name="move_to_folder">Move to folder</string>
+    <string name="save_here">Save here</string>
+    <string name="move_here">Move here</string>
+    <string name="make_pdf">Make PDF</string>
+    <string name="share">Share</string>
+    <string name="delete">Delete</string>
+    <string name="cancel">Cancel</string>
+    <string name="create">Create</string>
+    <string name="rename">Rename</string>
+</resources>

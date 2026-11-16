@@ -1,0 +1,126 @@
+{
+  "entities": {
+    "CloudFolder": {
+      "title": "CloudFolder",
+      "description": "User-scoped folder metadata stored in Cloud Firestore for cross-device backup and sync. Clients must submit FieldValue.serverTimestamp() for createdAt and updatedAt.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The UID of the authenticated Google user who owns this folder."
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the folder."
+        },
+        "parentId": {
+          "type": "string",
+          "description": "Parent folder ID, or empty string for root folders."
+        },
+        "sortOrder": {
+          "type": "integer",
+          "description": "Custom ordering index for the folder."
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "description": "Client creation epoch timestamp in milliseconds."
+        },
+        "updatedAtMs": {
+          "type": "integer",
+          "description": "Client update epoch timestamp in milliseconds."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp written via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp written via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "name",
+        "parentId",
+        "sortOrder",
+        "createdAtMs",
+        "updatedAtMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudScan": {
+      "title": "CloudScan",
+      "description": "User-scoped scanned document record with compressed JPEG payload stored in Cloud Firestore. Clients must submit FieldValue.serverTimestamp() for createdAt and updatedAt.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The UID of the authenticated Google user who owns this scan."
+        },
+        "folderId": {
+          "type": "string",
+          "description": "The ID of the parent folder containing this scan."
+        },
+        "fileName": {
+          "type": "string",
+          "description": "Display file name of the scan."
+        },
+        "capturedAt": {
+          "type": "integer",
+          "description": "Epoch timestamp in milliseconds when the scan was captured."
+        },
+        "filterName": {
+          "type": "string",
+          "description": "Applied scan enhancement filter enum name."
+        },
+        "rotationDegrees": {
+          "type": "integer",
+          "description": "Clockwise rotation in degrees."
+        },
+        "quadString": {
+          "type": "string",
+          "description": "Serialized normalized crop quad coordinates."
+        },
+        "thumbBase64": {
+          "type": "string",
+          "description": "Base64-encoded compressed JPEG image for cloud restore."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp written via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp written via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "folderId",
+        "fileName",
+        "capturedAt",
+        "filterName",
+        "rotationDegrees",
+        "quadString",
+        "thumbBase64",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/folders/{folderId}": {
+      "schema": "CloudFolder",
+      "description": "Stores folders owned by the authenticated user."
+    },
+    "/users/{userId}/scans/{scanId}": {
+      "schema": "CloudScan",
+      "description": "Stores document scans owned by the authenticated user."
+    }
+  }
+}
