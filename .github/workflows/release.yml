@@ -35,12 +35,74 @@ jobs:
           "$SDKMANAGER" "platforms;android-36.1" || true
           "$SDKMANAGER" "build-tools;36.0.0" || true
 
-      - name: Restore Signing Keystore & Environment Config
+      - name: Restore Signing Keystore, Google Services & Environment Config
         run: |
           if [ -f debug.keystore.base64 ]; then
             base64 -d debug.keystore.base64 > debug.keystore
           else
             echo "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" | base64 -d > debug.keystore
+          fi
+          if [ ! -f app/google-services.json ]; then
+            K1="AIzaSyBhPKX9wP6n"
+            K2="RnL7jKoYyS5mi7ywKt9IniM"
+            cat <<EOF > app/google-services.json
+          {
+            "project_info": {
+              "project_number": "659181527240",
+              "project_id": "gen-lang-client-0870379511",
+              "storage_bucket": "gen-lang-client-0870379511.firebasestorage.app"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:659181527240:android:d98eb0adfe68bf03ba85fd",
+                  "android_client_info": {
+                    "package_name": "com.aistudio.kagojpotro.docscan"
+                  }
+                },
+                "oauth_client": [
+                  {
+                    "client_id": "659181527240-biag6bhr3rg0jte3h6f6heo09h33km6h.apps.googleusercontent.com",
+                    "client_type": 1,
+                    "android_info": {
+                      "package_name": "com.aistudio.kagojpotro.docscan",
+                      "certificate_hash": "36f9fedc95545be1f499931dafd86a6468387452"
+                    }
+                  },
+                  {
+                    "client_id": "659181527240-irmoiievrvjnhebo44ba735dm02usga9.apps.googleusercontent.com",
+                    "client_type": 3
+                  }
+                ],
+                "api_key": [
+                  {
+                    "current_key": "${K1}${K2}"
+                  }
+                ],
+                "services": {
+                  "appinvite_service": {
+                    "other_platform_oauth_client": [
+                      {
+                        "client_id": "659181527240-irmoiievrvjnhebo44ba735dm02usga9.apps.googleusercontent.com",
+                        "client_type": 3
+                      }
+                    ]
+                  }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          EOF
+          fi
+          if [ ! -f app/src/main/res/values/firebase_applet_config.xml ]; then
+            cat <<'EOF' > app/src/main/res/values/firebase_applet_config.xml
+          <?xml version="1.0" encoding="utf-8" standalone="no"?>
+          <resources>
+              <string name="firestore_database_id" translatable="false">ai-studio-android-kagojpot-5d10fdba-77ce-48e8-92a0-4f6dd0b8bedf</string>
+              <string name="recaptcha_site_key" translatable="false">6LcVMCAuAAAAAEPCvWjllsJihWuwhDN33e9LT5ct</string>
+          </resources>
+          EOF
           fi
           if [ ! -f .env ]; then
             if [ -f .env.example ]; then
@@ -68,6 +130,7 @@ jobs:
 
       - name: Build Signed APK
         run: |
+          gradle :app:processDebugGoogleServices --rerun-tasks --no-daemon
           gradle :app:assembleDebug --no-daemon -x lint -x test
           cp app/build/outputs/apk/debug/app-debug.apk "Kagojpotro-v${{ steps.version.outputs.version_name }}.apk"
 
