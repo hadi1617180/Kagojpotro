@@ -2017,5 +2017,139 @@ class ExampleRobolectricTest {
         vm.removePdfPageAt(0)
         assertEquals(listOf(savedScans[1].id), vm.pdfOrderedScans.value.map { it.id })
     }
+
+    @Test
+    fun verifyAiEnhancePreservesColorfulPhotoHighlightsAndStamps() {
+        val w = 480
+        val h = 640
+        val src = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val px = IntArray(w * h)
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                // Slightly warm paper with left-side cast shadow
+                val shadowFactor = if (x < 160) 0.62f + 0.38f * (x / 160f) else 1f
+                var r = (232f * shadowFactor).toInt().coerceIn(0, 255)
+                var g = (224f * shadowFactor).toInt().coerceIn(0, 255)
+                var b = (210f * shadowFactor).toInt().coerceIn(0, 255)
+
+                // 1. Large 140x140 colorful photo/banner block (skin tone, blue sky, green foliage, dark hair interior)
+                if (x in 60 until 200 && y in 80 until 220) {
+                    if (y < 120) {
+                        // Sky blue
+                        r = (95f * shadowFactor).toInt()
+                        g = (165f * shadowFactor).toInt()
+                        b = (228f * shadowFactor).toInt()
+                    } else if (x in 95 until 165 && y in 120 until 155) {
+                        // Neutral dark hair inside photo (zero saturation, must NOT bleach to white!)
+                        r = 44; g = 42; b = 40
+                    } else if (x in 95 until 165 && y in 155 until 195) {
+                        // Natural warm skin tone (moderate saturation)
+                        r = 212; g = 162; b = 132
+                    } else {
+                        // Green shirt/background
+                        r = 62; g = 148; b = 88
+                    }
+                }
+
+                // 2. Pastel yellow highlighter band (moderate saturation, bright)
+                if (x in 240 until 420 && y in 280 until 312) {
+                    r = 242; g = 232; b = 128
+                }
+
+                // 3. Muted teal accent / stamp box
+                if (x in 260 until 390 && y in 380 until 450) {
+                    r = 85; g = 165; b = 158
+                }
+
+                // 4. Crisp red ink seal line
+                if (x in 80 until 220 && y in 420..423) {
+                    r = 185; g = 45; b = 45
+                }
+
+                px[y * w + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            }
+        }
+        src.setPixels(px, 0, w, 0, 0, w, h)
+
+        val out = DocumentImageProcessor.applyFilter(src, com.example.data.ScanFilter.AI_ENHANCE, 0.5f)
+        val outPx = IntArray(w * h)
+        out.getPixels(outPx, 0, w, 0, 0, w, h)
+
+        // Blank shadowed paper top-right / left margin must become pure white (#FFFFFF)
+        var pureWhitePaper = 0
+        var paperChecked = 0
+        for (y in 20 until 60) {
+            for (x in 240 until 440) {
+                paperChecked++
+                if ((outPx[y * w + x] and 0x00FFFFFF) == 0x00FFFFFF) pureWhitePaper++
+            }
+        }
+        assertTrue(
+            "Clean white margin must bleach to #FFFFFF (>95%), got ${pureWhitePaper.toFloat() / paperChecked}",
+            pureWhitePaper > paperChecked * 0.95f
+        )
+
+        // Sky blue interior inside large photo block must stay clearly blue (not white, not grayscale)
+        val skyPx = outPx[98 * w + 120]
+        val skyR = (skyPx ushr 16) and 0xFF
+        val skyG = (skyPx ushr 8) and 0xFF
+        val skyB = skyPx and 0xFF
+        assertTrue(
+            "Photo blue sky interior must remain rich blue, got RGB($skyR,$skyG,$skyB)",
+            skyB > skyR + 40 && skyB > skyG + 15 && skyR < 220
+        )
+
+        // Neutral dark hair inside photo block must stay dark (not hollowed out to white paper)
+        val hairPx = outPx[136 * w + 130]
+        val hairR = (hairPx ushr 16) and 0xFF
+        val hairG = (hairPx ushr 8) and 0xFF
+        val hairB = hairPx and 0xFF
+        val hairLum = (hairR * 77 + hairG * 150 + hairB * 29) ushr 8
+        assertTrue(
+            "Neutral dark detail inside photo must not bleach white, got lum=$hairLum RGB($hairR,$hairG,$hairB)",
+            hairLum < 130
+        )
+
+        // Skin tone must preserve warm peach hue (R > G > B, not grayscale)
+        val skinPx = outPx[175 * w + 130]
+        val skinR = (skinPx ushr 16) and 0xFF
+        val skinG = (skinPx ushr 8) and 0xFF
+        val skinB = skinPx and 0xFF
+        assertTrue(
+            "Skin tone must remain natural warm color, got RGB($skinR,$skinG,$skinB)",
+            skinR > skinG + 20 && skinG > skinB + 15 && skinB < 215
+        )
+
+        // Pastel yellow highlighter must retain yellow hue (R,G >> B)
+        val hlPx = outPx[296 * w + 330]
+        val hlR = (hlPx ushr 16) and 0xFF
+        val hlG = (hlPx ushr 8) and 0xFF
+        val hlB = hlPx and 0xFF
+        assertTrue(
+            "Yellow highlighter must retain hue without turning white/gray, got RGB($hlR,$hlG,$hlB)",
+            hlR > hlB + 45 && hlG > hlB + 40
+        )
+
+        // Muted teal box must preserve teal color
+        val tealPx = outPx[415 * w + 325]
+        val tealR = (tealPx ushr 16) and 0xFF
+        val tealG = (tealPx ushr 8) and 0xFF
+        val tealB = tealPx and 0xFF
+        assertTrue(
+            "Teal banner interior must keep solid teal color, got RGB($tealR,$tealG,$tealB)",
+            tealG > tealR + 30 && tealB > tealR + 25 && tealG < 235
+        )
+
+        // Red seal line must stay vivid red
+        val redPx = outPx[421 * w + 150]
+        val redR = (redPx ushr 16) and 0xFF
+        val redG = (redPx ushr 8) and 0xFF
+        val redB = redPx and 0xFF
+        assertTrue(
+            "Red seal stroke must stay vividly red, got RGB($redR,$redG,$redB)",
+            redR > redG + 60 && redR > redB + 60
+        )
+    }
 }
+
 

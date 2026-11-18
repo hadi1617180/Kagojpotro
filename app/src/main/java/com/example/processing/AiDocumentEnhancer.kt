@@ -13,10 +13,12 @@ import kotlin.math.roundToInt
  *
  * Combines:
  * 1. Tight multi-scale morphological paper surface tracking (480px grid) to eliminate steep
- *    left-side shadows, vignetting, folded creases, and tape strips.
- * 2. High-pass stroke-valley detection + back-page bleed-through suppression + crisp S-curve
- *    ink solidification & despeckle to produce clean, sharp, scan-ready white pages with rich
- *    solid strokes (while preserving vivid colored stamps/signatures).
+ *    left-side shadows, vignetting, folded creases, and tape strips on neutral paper.
+ * 2. Macro illumination surface + white-balanced chromaticity & local color-density map so
+ *    photos, ID portraits, colored logos/banners, pastel highlights, and red/blue stamps &
+ *    signatures preserve rich, natural, un-washed colors without hollowing or graying out.
+ * 3. High-pass stroke-valley detection + crisp S-curve ink solidification & despeckle for
+ *    razor-sharp black & colored text on clean #FFFFFF paper.
  *
  * Works 100% offline across all 3 storage modes (Phone Only, PC Server Sync, Google Sign-In)
  * with zero native binary dependencies.
@@ -47,8 +49,13 @@ object AiDocumentEnhancer {
         }
     }
 
+    private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
+        val t = ((x - edge0) / (edge1 - edge0).coerceAtLeast(1e-5f)).coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
+
     /**
-     * Produces a crisp, shadow-free, scan-grade document bitmap from [source], tuned by
+     * Produces a crisp, shadow-free, color-accurate document bitmap from [source], tuned by
      * [intensity] in `[0f, 1f]` (default `0.5f`).
      */
     fun enhance(source: Bitmap, intensity: Float = 0.5f): Bitmap {
@@ -62,7 +69,7 @@ object AiDocumentEnhancer {
 
         return synchronized(inferenceLock) {
             try {
-                // 1. Tight Multi-Scale Morphological Paper Surface (480px grid)
+                // 1. Multi-Scale Paper & Illumination Analysis on 480px Grid
                 val gScale = min(1f, GRID_MAX_DIM.toFloat() / max(w, h))
                 val gw = (w * gScale).roundToInt().coerceAtLeast(16)
                 val gh = (h * gScale).roundToInt().coerceAtLeast(16)
@@ -87,78 +94,144 @@ object AiDocumentEnhancer {
                     sL[i] = r * 0.299f + g * 0.587f + b * 0.114f
                 }
 
-                // 1. Tight Local Morphological Paper Surface on 480px Grid
-                // Bridges character strokes while hugging steep left-side shadows & tape edges
+                // 1a. Global Paper White-Balance Estimation from smooth bright low-chroma pixels
+                val lumCopy = sL.copyOf()
+                lumCopy.sort()
+                val p45Lum = lumCopy[(gTotal * 45) / 100]
+                var pRSum = 0.0
+                var pGSum = 0.0
+                var pBSum = 0.0
+                var pCount = 0
+                for (y in 2 until gh - 2) {
+                    val rowOff = y * gw
+                    for (x in 2 until gw - 2) {
+                        val idx = rowOff + x
+                        val lv = sL[idx]
+                        if (lv >= p45Lum && lv >= 120f) {
+                            val r = sR[idx]
+                            val g = sG[idx]
+                            val b = sB[idx]
+                            val sat = max(r, max(g, b)) - min(r, min(g, b))
+                            val grad = kotlin.math.abs(lv - sL[idx - 1]) + kotlin.math.abs(lv - sL[idx - gw])
+                            if (sat < 48f && grad < 16f) {
+                                pRSum += r
+                                pGSum += g
+                                pBSum += b
+                                pCount++
+                            }
+                        }
+                    }
+                }
+                val paperR: Float
+                val paperG: Float
+                val paperB: Float
+                val paperL: Float
+                val wbGainR: Float
+                val wbGainG: Float
+                val wbGainB: Float
+                if (pCount >= max(12, gTotal / 45)) {
+                    paperR = (pRSum / pCount).toFloat().coerceIn(80f, 255f)
+                    paperG = (pGSum / pCount).toFloat().coerceIn(80f, 255f)
+                    paperB = (pBSum / pCount).toFloat().coerceIn(80f, 255f)
+                    paperL = (paperR * 0.299f + paperG * 0.587f + paperB * 0.114f).coerceIn(80f, 255f)
+                    wbGainR = (paperL / paperR).coerceIn(0.82f, 1.25f)
+                    wbGainG = (paperL / paperG).coerceIn(0.82f, 1.25f)
+                    wbGainB = (paperL / paperB).coerceIn(0.82f, 1.25f)
+                } else {
+                    // Full-bleed colorful photo/poster without neutral white paper: keep native color balance
+                    val p85Lum = lumCopy[(gTotal * 85) / 100].coerceIn(140f, 248f)
+                    paperR = p85Lum
+                    paperG = p85Lum
+                    paperB = p85Lum
+                    paperL = p85Lum
+                    wbGainR = 1f
+                    wbGainG = 1f
+                    wbGainB = 1f
+                }
+
+                // 1b. Tight Local Morphological Paper Surface on 480px Grid (bridges text while hugging shadows)
                 val rMax = max(5, min(gw, gh) / 46)
                 val tempL = FloatArray(gTotal)
-                val tempR = FloatArray(gTotal)
-                val tempG = FloatArray(gTotal)
-                val tempB = FloatArray(gTotal)
                 val maxL = FloatArray(gTotal)
-                val maxR = FloatArray(gTotal)
-                val maxG = FloatArray(gTotal)
-                val maxB = FloatArray(gTotal)
 
                 for (y in 0 until gh) {
                     val rowOff = y * gw
                     for (x in 0 until gw) {
                         var bestL = sL[rowOff + x]
-                        var bestR = sR[rowOff + x]
-                        var bestG = sG[rowOff + x]
-                        var bestB = sB[rowOff + x]
                         val xStart = max(0, x - rMax)
                         val xEnd = min(gw - 1, x + rMax)
                         for (kx in xStart..xEnd) {
-                            val idx = rowOff + kx
-                            val lv = sL[idx]
-                            if (lv > bestL) {
-                                bestL = lv
-                                bestR = sR[idx]
-                                bestG = sG[idx]
-                                bestB = sB[idx]
-                            }
+                            val lv = sL[rowOff + kx]
+                            if (lv > bestL) bestL = lv
                         }
-                        val outIdx = rowOff + x
-                        tempL[outIdx] = bestL
-                        tempR[outIdx] = bestR
-                        tempG[outIdx] = bestG
-                        tempB[outIdx] = bestB
+                        tempL[rowOff + x] = bestL
                     }
                 }
-
                 for (x in 0 until gw) {
                     for (y in 0 until gh) {
                         var bestL = tempL[y * gw + x]
-                        var bestR = tempR[y * gw + x]
-                        var bestG = tempG[y * gw + x]
-                        var bestB = tempB[y * gw + x]
                         val yStart = max(0, y - rMax)
                         val yEnd = min(gh - 1, y + rMax)
                         for (ky in yStart..yEnd) {
-                            val idx = ky * gw + x
-                            val lv = tempL[idx]
-                            if (lv > bestL) {
-                                bestL = lv
-                                bestR = tempR[idx]
-                                bestG = tempG[idx]
-                                bestB = tempB[idx]
-                            }
+                            val lv = tempL[ky * gw + x]
+                            if (lv > bestL) bestL = lv
                         }
-                        val outIdx = y * gw + x
-                        maxL[outIdx] = bestL
-                        maxR[outIdx] = bestR
-                        maxG[outIdx] = bestG
-                        maxB[outIdx] = bestB
+                        maxL[y * gw + x] = bestL
                     }
                 }
-
-                // Tight 1px box blur so local paper surface tracks steep shadow slopes with zero lag
-                val rBlur = 1
                 val bgL = FloatArray(gTotal)
-                val bgR = FloatArray(gTotal)
-                val bgG = FloatArray(gTotal)
-                val bgB = FloatArray(gTotal)
-                boxBlur4(maxL, maxR, maxG, maxB, gw, gh, rBlur, tempL, tempR, tempG, tempB, bgL, bgR, bgG, bgB)
+                boxBlur1(maxL, gw, gh, 1, tempL, bgL)
+
+                // 1c. Macro Illumination Surface (spans photos/colored banners cleanly without shrinking inside them)
+                val rMacro = max(16, min(gw, gh) / 12)
+                for (y in 0 until gh) {
+                    val rowOff = y * gw
+                    for (x in 0 until gw) {
+                        var bestL = sL[rowOff + x]
+                        val xStart = max(0, x - rMacro)
+                        val xEnd = min(gw - 1, x + rMacro)
+                        for (kx in xStart..xEnd) {
+                            val lv = sL[rowOff + kx]
+                            if (lv > bestL) bestL = lv
+                        }
+                        tempL[rowOff + x] = bestL
+                    }
+                }
+                for (x in 0 until gw) {
+                    for (y in 0 until gh) {
+                        var bestL = tempL[y * gw + x]
+                        val yStart = max(0, y - rMacro)
+                        val yEnd = min(gh - 1, y + rMacro)
+                        for (ky in yStart..yEnd) {
+                            val lv = tempL[ky * gw + x]
+                            if (lv > bestL) bestL = lv
+                        }
+                        maxL[y * gw + x] = bestL
+                    }
+                }
+                val macroBgL = FloatArray(gTotal)
+                val rMacroBlur = max(12, min(gw, gh) / 14)
+                boxBlur1(maxL, gw, gh, rMacroBlur, tempL, macroBgL)
+
+                // 1d. White-Balanced Chroma Density Map (detects photos, portraits, & colorful graphics regions)
+                val rawChromaGrid = FloatArray(gTotal)
+                for (i in 0 until gTotal) {
+                    val wr = (sR[i] * wbGainR).coerceIn(0f, 255f)
+                    val wg = (sG[i] * wbGainG).coerceIn(0f, 255f)
+                    val wb = (sB[i] * wbGainB).coerceIn(0f, 255f)
+                    val cMax = max(wr, max(wg, wb))
+                    val cMin = min(wr, min(wg, wb))
+                    val wSat = cMax - cMin
+                    rawChromaGrid[i] = if (wSat > 11f) {
+                        val rel = wSat / cMax.coerceAtLeast(48f)
+                        max(wSat, wSat * 0.45f + rel * 105f)
+                    } else {
+                        0f
+                    }
+                }
+                val colorDensityGrid = FloatArray(gTotal)
+                val rColorBlur = max(5, min(gw, gh) / 72)
+                boxBlur1(rawChromaGrid, gw, gh, rColorBlur, tempL, colorDensityGrid)
 
                 // 2. Full-resolution Multi-Scale Bilateral Ray-Maxima Stroke & Solid-Interior Extractor
                 // Use ByteArray (1 byte/px vs 4 bytes/px) to save ~38 MB at 4096px
@@ -178,12 +251,8 @@ object AiDocumentEnhancer {
                 val blackCut = (whiteCut + 0.340f - clampedIntensity * 0.070f).coerceIn(whiteCut + 0.20f, 0.56f)
                 val valleyGain = 0.74f + clampedIntensity * 0.24f
                 val inkGamma = (1.06f - clampedIntensity * 0.12f).coerceIn(0.92f, 1.15f)
+                val contrastAmt = 0.10f + clampedIntensity * 0.18f
 
-                // 6-step ray distances from 1px up to wide bold-header stem width (~15-24px).
-                // By taking `min(max along negative ray, max along positive ray)` independently along H, V, D1, D2
-                // (without asymmetric distance mismatch or slopeGate blocking), every pixel inside bold headers
-                // ("BD INTERIOR", headings, bold keywords) sees the paper on both sides of the stroke and stays
-                // 100% solid black inside, while broad cast shadows have one side remaining dark (`valley = 0`).
                 val minDim = min(w, h)
                 val r0 = 1
                 val r1 = 2
@@ -223,9 +292,8 @@ object AiDocumentEnhancer {
                         val w11 = fx * fy
 
                         val bL = bgL[rowG0 + gx0] * w00 + bgL[rowG0 + gx1] * w10 + bgL[rowG1 + gx0] * w01 + bgL[rowG1 + gx1] * w11
-                        val bR = bgR[rowG0 + gx0] * w00 + bgR[rowG0 + gx1] * w10 + bgR[rowG1 + gx0] * w01 + bgR[rowG1 + gx1] * w11
-                        val bG = bgG[rowG0 + gx0] * w00 + bgG[rowG0 + gx1] * w10 + bgG[rowG1 + gx0] * w01 + bgG[rowG1 + gx1] * w11
-                        val bB = bgB[rowG0 + gx0] * w00 + bgB[rowG0 + gx1] * w10 + bgB[rowG1 + gx0] * w01 + bgB[rowG1 + gx1] * w11
+                        val mL = macroBgL[rowG0 + gx0] * w00 + macroBgL[rowG0 + gx1] * w10 + macroBgL[rowG1 + gx0] * w01 + macroBgL[rowG1 + gx1] * w11
+                        val colDens = colorDensityGrid[rowG0 + gx0] * w00 + colorDensityGrid[rowG0 + gx1] * w10 + colorDensityGrid[rowG1 + gx0] * w01 + colorDensityGrid[rowG1 + gx1] * w11
 
                         val idx = rowOff + x
                         val c = pixels[idx]
@@ -236,7 +304,9 @@ object AiDocumentEnhancer {
                         val lum = lumInt.toFloat()
 
                         val safeBgL = bL.coerceAtLeast(28f)
+                        val safeMacroL = max(mL, safeBgL).coerceAtLeast(36f)
                         val ratio = lum / safeBgL
+                        val macroRatio = lum / safeMacroL
                         val drop = (1f - ratio).coerceIn(0f, 1f)
 
                         val xm0 = max(0, x - r0); val xp0 = min(w - 1, x + r0)
@@ -293,7 +363,7 @@ object AiDocumentEnhancer {
                         val valley = if (rawValley > noiseFloor) rawValley - noiseFloor else 0f
 
                         // Soft-shadow gate: cast shadows & dim lighting attenuate cleanly to #FFFFFF,
-                        // while thin and bold strokes keep 100% solid interiors and slender anti-aliased edges.
+                        // while thin and bold B&W strokes keep 100% solid interiors and slender edges.
                         val sharpWeight = (valley / 0.058f).coerceIn(0f, 1f)
                         val solidFillWeight = (((0.26f - ratio) / 0.14f).coerceIn(0f, 1f)) * (((52f - lum) / 24f).coerceIn(0f, 1f))
                         val keepWeight = max(sharpWeight, solidFillWeight)
@@ -302,41 +372,106 @@ object AiDocumentEnhancer {
                         val maxAllowedByDrop = drop * (1.08f + clampedIntensity * 0.22f)
                         val rawSignal = min(strokeSignal, maxAllowedByDrop)
 
-                        // Check normalized color chroma relative to local paper (preserves vivid red/blue stamps & colored ink)
-                        val nr = ((r / bR.coerceAtLeast(28f)) * 255f).coerceIn(0f, 255f)
-                        val ng = ((g / bG.coerceAtLeast(28f)) * 255f).coerceIn(0f, 255f)
-                        val nb = ((b / bB.coerceAtLeast(28f)) * 255f).coerceIn(0f, 255f)
-                        val normSat = max(nr, max(ng, nb)) - min(nr, min(ng, nb))
-                        val insideSafeMargin = x >= 4 && x < w - 4 && y >= 4 && y < h - 4
-                        val isVividColorInk = insideSafeMargin && normSat >= 86f && ratio < 0.88f && (valley > 0.04f || drop > 0.20f)
-
-                        if (rawSignal <= whiteCut && !isVividColorInk) {
-                            pixels[idx] = -0x1 // Pure #FFFFFF
+                        val bwInk = if (rawSignal <= whiteCut) {
+                            0f
                         } else {
-                            val effectiveSignal = if (isVividColorInk) max(rawSignal, whiteCut + (normSat - 70f) / 170f) else rawSignal
-                            if (effectiveSignal <= whiteCut) {
+                            val t = ((rawSignal - whiteCut) / (blackCut - whiteCut)).coerceIn(0f, 1f)
+                            val s = t * t * (3f - 2f * t)
+                            s.pow(inkGamma)
+                        }
+                        val bwGray = ((1f - bwInk) * 255f).roundToInt().coerceIn(0, 255)
+
+                        // White-balance pixel & compute continuous color/photo preservation weights
+                        val wr = (r * wbGainR).coerceIn(0f, 255f)
+                        val wg = (g * wbGainG).coerceIn(0f, 255f)
+                        val wb = (b * wbGainB).coerceIn(0f, 255f)
+                        val wMax = max(wr, max(wg, wb))
+                        val wMin = min(wr, min(wg, wb))
+                        val wSat = wMax - wMin
+                        val pixelChroma = if (wSat > 10f) {
+                            val relChroma = wSat / wMax.coerceAtLeast(48f)
+                            max(wSat, wSat * 0.45f + relChroma * 105f)
+                        } else {
+                            0f
+                        }
+
+                        val insideSafeMargin = x >= 4 && x < w - 4 && y >= 4 && y < h - 4
+                        val pixelColorW = if (insideSafeMargin) smoothstep(14f, 40f, pixelChroma) else 0f
+                        // Preserves solid midtones/darks inside photos, logos, & colored banners while
+                        // letting bright white paper (macroRatio >= 0.94) bleach to #FFFFFF
+                        val photoInteriorW = if (insideSafeMargin) {
+                            smoothstep(20f, 42f, colDens) * smoothstep(0.95f, 0.78f, macroRatio)
+                        } else {
+                            0f
+                        }
+                        val colorBlend = max(pixelColorW, photoInteriorW)
+
+                        if (colorBlend <= 0.01f) {
+                            if (bwGray >= 255) {
                                 pixels[idx] = -0x1
                             } else {
-                                val t = ((effectiveSignal - whiteCut) / (blackCut - whiteCut)).coerceIn(0f, 1f)
-                                val s = t * t * (3f - 2f * t)
-                                val ink = s.pow(inkGamma)
-
-                                if (isVividColorInk) {
-                                    // Alpha 0xFE tags vivid color ink without allocating a BooleanArray(total)
-                                    val boost = 1.28f
-                                    val avg = (nr + ng + nb) / 3f
-                                    val sr = (avg + (nr - avg) * boost).coerceIn(0f, 255f) * 0.90f
-                                    val sg = (avg + (ng - avg) * boost).coerceIn(0f, 255f) * 0.90f
-                                    val sb = (avg + (nb - avg) * boost).coerceIn(0f, 255f) * 0.90f
-                                    val outR = (255f * (1f - ink) + sr * ink).roundToInt().coerceIn(0, 255)
-                                    val outG = (255f * (1f - ink) + sg * ink).roundToInt().coerceIn(0, 255)
-                                    val outB = (255f * (1f - ink) + sb * ink).roundToInt().coerceIn(0, 255)
-                                    pixels[idx] = (0xFE shl 24) or (outR shl 16) or (outG shl 8) or outB
-                                } else {
-                                    val gray = ((1f - ink) * 255f).roundToInt().coerceIn(0, 255)
-                                    pixels[idx] = (0xFF shl 24) or (gray shl 16) or (gray shl 8) or gray
-                                }
+                                pixels[idx] = (0xFF shl 24) or (bwGray shl 16) or (bwGray shl 8) or bwGray
                             }
+                        } else {
+                            // Anchor illumination smoothly so dim shadows lift without blowing out large dark photos
+                            val photoSafeMacroL = max(safeMacroL, paperL * 0.84f)
+                            val strokeIllumL = safeMacroL * 0.45f + safeBgL * 0.55f
+                            val illumL = strokeIllumL * (1f - photoInteriorW) + photoSafeMacroL * photoInteriorW
+                            val scaleToPaper = (250f / illumL.coerceAtLeast(36f)).coerceIn(0.88f, 2.35f)
+
+                            var nr = wr * scaleToPaper
+                            var ng = wg * scaleToPaper
+                            var nb = wb * scaleToPaper
+                            val peak = max(nr, max(ng, nb))
+                            if (peak > 255f) {
+                                val down = 255f / peak
+                                nr *= down
+                                ng *= down
+                                nb *= down
+                            }
+
+                            // Gentle perceptual S-curve for contrast + hue-locked vibrance
+                            val nLum = (nr * 0.299f + ng * 0.587f + nb * 0.114f).coerceAtLeast(1f)
+                            val u = (nLum / 255f).coerceIn(0f, 1f)
+                            val sCurve = u * u * (3f - 2f * u)
+                            val targetU = (u + contrastAmt * (sCurve - u)).coerceIn(0f, 1f)
+                            val contrastGain = (targetU * 255f) / nLum
+                            var cr = nr * contrastGain
+                            var cg = ng * contrastGain
+                            var cb = nb * contrastGain
+                            val cPeak = max(cr, max(cg, cb))
+                            if (cPeak > 255f) {
+                                val down = 255f / cPeak
+                                cr *= down
+                                cg *= down
+                                cb *= down
+                            }
+
+                            // Selective vibrance boosts muted colors gently without neon-clipping vivid ones
+                            val cMax = max(cr, max(cg, cb))
+                            val cMin = min(cr, min(cg, cb))
+                            val satRatio = ((cMax - cMin) / 255f).coerceIn(0f, 1f)
+                            val vibrance = (0.12f + clampedIntensity * 0.16f) * (1f - satRatio * 0.62f)
+                            val avgL = cr * 0.299f + cg * 0.587f + cb * 0.114f
+                            cr = (avgL + (cr - avgL) * (1f + vibrance)).coerceIn(0f, 255f)
+                            cg = (avgL + (cg - avgL) * (1f + vibrance)).coerceIn(0f, 255f)
+                            cb = (avgL + (cb - avgL) * (1f + vibrance)).coerceIn(0f, 255f)
+
+                            // Crisp darkening only for thin colored text/stamps on white paper, never photos
+                            if (bwInk > 0.20f && photoInteriorW < 0.35f) {
+                                val inkDeepen = 1f - 0.14f * bwInk * (1f - photoInteriorW)
+                                cr *= inkDeepen
+                                cg *= inkDeepen
+                                cb *= inkDeepen
+                            }
+
+                            val bwF = bwGray.toFloat()
+                            val outR = (bwF * (1f - colorBlend) + cr * colorBlend).roundToInt().coerceIn(0, 255)
+                            val outG = (bwF * (1f - colorBlend) + cg * colorBlend).roundToInt().coerceIn(0, 255)
+                            val outB = (bwF * (1f - colorBlend) + cb * colorBlend).roundToInt().coerceIn(0, 255)
+                            // Tag pixels with noticeable color (alpha 0xFE) so Pass 4 protects them from grayscale despeckle
+                            val alphaTag = if (colorBlend >= 0.25f) 0xFE else 0xFF
+                            pixels[idx] = (alphaTag shl 24) or (outR shl 16) or (outG shl 8) or outB
                         }
                     }
                 }
@@ -364,58 +499,44 @@ object AiDocumentEnhancer {
         }
     }
 
-    private fun boxBlur4(
-        inL: FloatArray, inR: FloatArray, inG: FloatArray, inB: FloatArray,
-        gw: Int, gh: Int, radius: Int,
-        tmpL: FloatArray, tmpR: FloatArray, tmpG: FloatArray, tmpB: FloatArray,
-        outL: FloatArray, outR: FloatArray, outG: FloatArray, outB: FloatArray
+    private fun boxBlur1(
+        input: FloatArray,
+        gw: Int,
+        gh: Int,
+        radius: Int,
+        tmp: FloatArray,
+        output: FloatArray
     ) {
         for (y in 0 until gh) {
             val rowOff = y * gw
-            var sumL = 0f; var sumR = 0f; var sumG = 0f; var sumB = 0f
+            var sum = 0f
             val initWin = min(gw, radius + 1)
             for (x in 0 until initWin) {
-                val idx = rowOff + x
-                sumL += inL[idx]; sumR += inR[idx]; sumG += inG[idx]; sumB += inB[idx]
+                sum += input[rowOff + x]
             }
             for (x in 0 until gw) {
                 val left = x - radius - 1
                 val right = x + radius
-                if (left >= 0) {
-                    val idx = rowOff + left
-                    sumL -= inL[idx]; sumR -= inR[idx]; sumG -= inG[idx]; sumB -= inB[idx]
-                }
-                if (right < gw && right >= initWin) {
-                    val idx = rowOff + right
-                    sumL += inL[idx]; sumR += inR[idx]; sumG += inG[idx]; sumB += inB[idx]
-                }
+                if (left >= 0) sum -= input[rowOff + left]
+                if (right < gw && right >= initWin) sum += input[rowOff + right]
                 val inv = 1f / (min(gw - 1, right) - max(0, left + 1) + 1).coerceAtLeast(1)
-                val idx = rowOff + x
-                tmpL[idx] = sumL * inv; tmpR[idx] = sumR * inv; tmpG[idx] = sumG * inv; tmpB[idx] = sumB * inv
+                tmp[rowOff + x] = sum * inv
             }
         }
 
         for (x in 0 until gw) {
-            var sumL = 0f; var sumR = 0f; var sumG = 0f; var sumB = 0f
+            var sum = 0f
             val initWin = min(gh, radius + 1)
             for (y in 0 until initWin) {
-                val idx = y * gw + x
-                sumL += tmpL[idx]; sumR += tmpR[idx]; sumG += tmpG[idx]; sumB += tmpB[idx]
+                sum += tmp[y * gw + x]
             }
             for (y in 0 until gh) {
                 val top = y - radius - 1
                 val bottom = y + radius
-                if (top >= 0) {
-                    val idx = top * gw + x
-                    sumL -= tmpL[idx]; sumR -= tmpR[idx]; sumG -= tmpG[idx]; sumB -= tmpB[idx]
-                }
-                if (bottom < gh && bottom >= initWin) {
-                    val idx = bottom * gw + x
-                    sumL += tmpL[idx]; sumR += tmpR[idx]; sumG += tmpG[idx]; sumB += tmpB[idx]
-                }
+                if (top >= 0) sum -= tmp[top * gw + x]
+                if (bottom < gh && bottom >= initWin) sum += tmp[bottom * gw + x]
                 val inv = 1f / (min(gh - 1, bottom) - max(0, top + 1) + 1).coerceAtLeast(1)
-                val idx = y * gw + x
-                outL[idx] = sumL * inv; outR[idx] = sumR * inv; outG[idx] = sumG * inv; outB[idx] = sumB * inv
+                output[y * gw + x] = sum * inv
             }
         }
     }
